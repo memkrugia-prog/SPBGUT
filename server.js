@@ -11,31 +11,72 @@ app.use(cookieParser());
 app.use(express.static(path.join(__dirname,'public')));
 const PORT = process.env.PORT || 3000;
 const ADMIN_IDS = (process.env.ADMIN_TG_IDS||'').split(',').map(s=>s.trim()).filter(Boolean).map(Number);
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
 const REMIND_HOUR_MOSCOW = parseInt(process.env.REMIND_HOUR || '19');
 const MOSCOW_OFFSET = 3;
 const CHANGELOG = [
- { v:'0.4.0', date:'сегодня', notes:['🃏 Карточки с переворотом + бесконечный режим','🧠 SRS: сложные слова возвращаются чаще','📖 Развёрнутые нюансы и синонимы','🟢 Баланс сложности','🔤 Шрифт Manrope']},
+ { v:'0.5.0', date:'сегодня', notes:['📚 Домашка: не знаешь слово на карточке → обязательное задание (справочник + тест)','💀 Пропуск дня = −1500 рейтинга','🧠 Умный SRS: неузнанные долбят каждые 5 мин, узнанные уходят на дни','📊 Статистика карточек: счётчики Узнано / Не узнано']},
+ { v:'0.4.0', date:'ранее', notes:['🃏 Карточки с переворотом + бесконечный режим','🧠 SRS: сложные слова возвращаются чаще','📖 Развёрнутые нюансы и синонимы','🟢 Баланс сложности','🔤 Шрифт Manrope']},
  { v:'0.3.1', date:'ранее', notes:['Авто-рассылка changelog','Команда /version']},
  { v:'0.3.0', date:'ранее', notes:['Рассылка 19:00 МСК','Таймер 24ч','Категории']},
  { v:'0.2.0', date:'ранее', notes:['Railway + PostgreSQL, Telegram OAuth']},
  { v:'0.1.0', date:'ранее', notes:['Первый релиз']}
 ];
+
 const today = () => new Date().toISOString().slice(0,10);
 const addDays = (d,n) => { const x=new Date(d+'T00:00:00'); x.setDate(x.getDate()+n); return x.toISOString().slice(0,10); };
+
+// ─── Умный SRS: интервалы ────────────────────────────────────────────────────
+// Неузнанные слова: 5м → 30м → 2ч → 6ч → 1д → 3д
+const UNKNOWN_INTERVALS = [5, 30, 120, 360, 1440, 4320];
+// Узнанные слова:  1д → 2д → 4д → 7д → 7д (потолок)
+const KNOWN_INTERVALS   = [1440, 2880, 5760, 10080, 10080];
+
+function unknownInterval(unknownCount){
+  return UNKNOWN_INTERVALS[Math.min(unknownCount, UNKNOWN_INTERVALS.length) - 1] || 5;
+}
+function knownInterval(knownCount){
+  return KNOWN_INTERVALS[Math.min(knownCount, KNOWN_INTERVALS.length) - 1] || 10080;
+}
+
+// ─── Штрафы ─────────────────────────────────────────────────────────────────
+async function applyHomeworkPenalties(userId){
+  // Находим просроченные домашки (stage < 2, due_at прошёл, ещё не штрафовали)
+  const overdue = (await db.q(
+    `SELECT word_id FROM homework WHERE user_id=$1 AND stage < 2 AND due_at < NOW() AND penalized=FALSE`,
+    [userId]
+  )).rows;
+  for(const hw of overdue){
+    await db.q('UPDATE users SET rating=GREATEST(0,rating-100) WHERE id=$1', [userId]);
+    // Перенести дедлайн на +24ч, сбросить флаг штрафа для следующей проверки
+    await db.q(
+      `UPDATE homework SET penalized=TRUE, due_at=NOW()+'24 hours'::interval
+       WHERE user_id=$1 AND word_id=$2`,
+      [userId, hw.word_id]
+    );
+  }
+}
+
 async function applyPenaltiesFor(userId){
   const u = (await db.q('SELECT * FROM users WHERE id=$1',[userId])).rows[0];
   if(!u || !u.last_dict_at) return;
-  const diff = (Date.now() - new Date(u.last_dict_at).getTime()) / 36e5;
+  const diff = (Date.now() - new Date(u.last_dict_at).getTime()) / 36e5; // часов
   if(diff > 24){
-    const missCount = Math.floor(diff / 24) - 1;
-    if(missCount > 0) await db.q('UPDATE users SET rating=GREATEST(0,rating-$1) WHERE id=$2',[missCount*50,userId]);
+    const missCount = Math.floor(diff / 24) - 1; // кол-во полных пропущенных дней сверх первых 24ч
+    if(missCount > 0){
+      // −1500 за каждый пропущенный день (вместо старых −50)
+      await db.q('UPDATE users SET rating=GREATEST(0,rating-$1) WHERE id=$2', [missCount * 1500, userId]);
+    }
   }
+  await applyHomeworkPenalties(userId);
 }
+
 async function applyAllPenalties(){
   const us = (await db.q('SELECT id FROM users')).rows;
   for(const u of us) await applyPenaltiesFor(u.id);
 }
+
+// ─── Вспомогательные ────────────────────────────────────────────────────────
 async function addActivity(userId,{points=0,answered=0,correct=0,dictations=0}){
   await db.q(`INSERT INTO activity(user_id,day,points,answered,correct,dictations) VALUES($1,CURRENT_DATE,$2,$3,$4,$5)
     ON CONFLICT(user_id,day) DO UPDATE SET points=activity.points+EXCLUDED.points, answered=activity.answered+EXCLUDED.answered,
@@ -59,6 +100,8 @@ async function auth(req,res,next){
   req.user = u; next();
 }
 function adminOnly(req,res,next){ if(!req.user.is_admin) return res.status(403).json({error:'admin only'}); next(); }
+
+// ─── Config / Auth ───────────────────────────────────────────────────────────
 app.get('/api/config',(req,res)=>{
   const tokenParts = (process.env.BOT_TOKEN||'').split(':');
   res.json({ botUsername:process.env.BOT_USERNAME, botId:tokenParts[0]||'', version:VERSION, remindHour:REMIND_HOUR_MOSCOW });
@@ -95,12 +138,16 @@ app.post('/auth/telegram', async (req,res)=>{
   }catch(e){ console.error('auth error',e); res.status(500).json({error:'server error'}); }
 });
 app.post('/auth/logout',(req,res)=>{ res.clearCookie('sid'); res.json({ok:true}); });
+
+// ─── Me / Words ──────────────────────────────────────────────────────────────
 app.get('/api/me', auth, async (req,res)=>{
   await applyPenaltiesFor(req.user.id);
   const u = (await db.q('SELECT * FROM users WHERE id=$1',[req.user.id])).rows[0];
   let nextDeadline = null;
   if(u.last_dict_at) nextDeadline = new Date(u.last_dict_at).getTime() + 24*36e5;
-  res.json({ user:{ id:u.id, name:(u.first_name||u.username||'User'), username:u.username, isAdmin:u.is_admin, rating:u.rating, streak:u.streak }, lastDictAt:u.last_dict_at, nextDeadline, remindHour:REMIND_HOUR_MOSCOW });
+  // Считаем открытые домашки
+  const hw = (await db.q('SELECT COUNT(*)::int n FROM homework WHERE user_id=$1 AND stage < 2',[u.id])).rows[0].n;
+  res.json({ user:{ id:u.id, name:(u.first_name||u.username||'User'), username:u.username, isAdmin:u.is_admin, rating:u.rating, streak:u.streak }, lastDictAt:u.last_dict_at, nextDeadline, remindHour:REMIND_HOUR_MOSCOW, openHomework:hw });
 });
 app.get('/api/words', auth, async (req,res)=>{
   const diff = req.query.difficulty;
@@ -120,24 +167,81 @@ app.post('/api/words', auth, async (req,res)=>{
 app.delete('/api/words/:id', auth, adminOnly, async (req,res)=>{
   await db.q('DELETE FROM words WHERE id=$1',[req.params.id]); res.json({ok:true});
 });
+
+// ─── Answer (карточки) — умный SRS ──────────────────────────────────────────
+// source: 'card' | 'dictation' | другое
+// Только 'card' влияет на known_count/unknown_count и домашку
 app.post('/api/answer', auth, async (req,res)=>{
-  const { word_id, mode, correct } = req.body;
-  await db.q('INSERT INTO answers(user_id,word_id,mode,correct) VALUES($1,$2,$3,$4)',[req.user.id,word_id,mode,correct]);
-  const pts = correct?10:0;
-  if(pts) await addRating(req.user.id,pts);
-  await addActivity(req.user.id,{points:pts,answered:1,correct:correct?1:0});
-  if(!correct){
-    const cur = (await db.q('SELECT errors FROM srs WHERE user_id=$1 AND word_id=$2',[req.user.id,word_id])).rows[0];
-    const e = (cur?cur.errors:0)+1;
-    const mins = [10,60,360,1440,4320,10080][Math.min(e,6)-1] || 10080;
-    await db.q(`INSERT INTO srs(user_id,word_id,errors,next_review) VALUES($1,$2,$3,NOW()+($4||' minutes')::interval)
-      ON CONFLICT(user_id,word_id) DO UPDATE SET errors=$3, next_review=NOW()+($4||' minutes')::interval`,[req.user.id,word_id,e,mins]);
+  const { word_id, mode, correct, source } = req.body;
+  const uid = req.user.id;
+  await db.q('INSERT INTO answers(user_id,word_id,mode,correct) VALUES($1,$2,$3,$4)',[uid,word_id,mode,correct]);
+  const pts = correct ? 10 : 0;
+  if(pts) await addRating(uid, pts);
+  await addActivity(uid,{points:pts,answered:1,correct:correct?1:0});
+
+  if(source === 'card'){
+    // Получаем текущую запись SRS
+    const cur = (await db.q('SELECT * FROM srs WHERE user_id=$1 AND word_id=$2',[uid,word_id])).rows[0];
+    const knownCount   = (cur?.known_count   || 0);
+    const unknownCount = (cur?.unknown_count || 0);
+
+    if(correct){
+      // ✅ Узнал: +1 known, сбрасываем unknown, планируем редко
+      const newKnown = knownCount + 1;
+      const mins = knownInterval(newKnown);
+      await db.q(
+        `INSERT INTO srs(user_id,word_id,known_count,unknown_count,errors,next_review)
+         VALUES($1,$2,$3,0,0,NOW()+($4||' minutes')::interval)
+         ON CONFLICT(user_id,word_id) DO UPDATE
+           SET known_count=$3, unknown_count=0, errors=0,
+               next_review=NOW()+($4||' minutes')::interval`,
+        [uid, word_id, newKnown, mins]
+      );
+      // Если слово было на стадии 1 в домашке — закрываем
+      await db.q(
+        `UPDATE homework SET stage=2 WHERE user_id=$1 AND word_id=$2 AND stage=1`,
+        [uid, word_id]
+      );
+    } else {
+      // ❌ Не узнал: +1 unknown, сбрасываем known, планируем часто
+      const newUnknown = unknownCount + 1;
+      const mins = unknownInterval(newUnknown);
+      await db.q(
+        `INSERT INTO srs(user_id,word_id,known_count,unknown_count,errors,next_review)
+         VALUES($1,$2,0,$3,$3,NOW()+($4||' minutes')::interval)
+         ON CONFLICT(user_id,word_id) DO UPDATE
+           SET known_count=0, unknown_count=$3, errors=$3,
+               next_review=NOW()+($4||' minutes')::interval`,
+        [uid, word_id, newUnknown, mins]
+      );
+      // Добавляем в домашку (если ещё не открыта)
+      await db.q(
+        `INSERT INTO homework(user_id,word_id,stage,due_at)
+         VALUES($1,$2,0,NOW()+'48 hours'::interval)
+         ON CONFLICT(user_id,word_id) DO NOTHING`,
+        [uid, word_id]
+      );
+    }
   } else {
-    await db.q(`UPDATE srs SET errors=GREATEST(0,errors-1) WHERE user_id=$1 AND word_id=$2`,[req.user.id,word_id]);
-    await db.q(`DELETE FROM srs WHERE user_id=$1 AND word_id=$2 AND errors=0`,[req.user.id,word_id]);
+    // Старая логика для не-карточек (диктант/тест)
+    if(!correct){
+      const cur = (await db.q('SELECT errors FROM srs WHERE user_id=$1 AND word_id=$2',[uid,word_id])).rows[0];
+      const e = (cur?cur.errors:0)+1;
+      const mins = [10,60,360,1440,4320,10080][Math.min(e,6)-1] || 10080;
+      await db.q(
+        `INSERT INTO srs(user_id,word_id,errors,next_review) VALUES($1,$2,$3,NOW()+($4||' minutes')::interval)
+         ON CONFLICT(user_id,word_id) DO UPDATE SET errors=$3, next_review=NOW()+($4||' minutes')::interval`,
+        [uid,word_id,e,mins]
+      );
+    } else {
+      await db.q(`UPDATE srs SET errors=GREATEST(0,errors-1) WHERE user_id=$1 AND word_id=$2`,[uid,word_id]);
+      await db.q(`DELETE FROM srs WHERE user_id=$1 AND word_id=$2 AND errors=0`,[uid,word_id]);
+    }
   }
   res.json({ ok:true });
 });
+
+// ─── Dictation ───────────────────────────────────────────────────────────────
 app.post('/api/dictation', auth, async (req,res)=>{
   const { total, correct, difficulty } = req.body;
   let bonus = 20; if(correct===total) bonus+=30;
@@ -153,30 +257,146 @@ app.post('/api/dictation', auth, async (req,res)=>{
   await db.q('UPDATE users SET last_dict_at=NOW(), streak=$2 WHERE id=$1',[req.user.id,streak]);
   res.json({ bonus });
 });
+
+// ─── SRS ─────────────────────────────────────────────────────────────────────
 app.get('/api/srs/due', auth, async (req,res)=>{
-  const { rows } = await db.q(`SELECT w.* FROM srs s JOIN words w ON w.id=s.word_id WHERE s.user_id=$1 AND s.next_review<=NOW() ORDER BY s.errors DESC LIMIT 20`,[req.user.id]);
+  const { rows } = await db.q(
+    `SELECT w.*, s.known_count, s.unknown_count FROM srs s
+     JOIN words w ON w.id=s.word_id
+     WHERE s.user_id=$1 AND s.next_review<=NOW()
+     ORDER BY s.unknown_count DESC, s.errors DESC LIMIT 20`,
+    [req.user.id]
+  );
   res.json(rows);
 });
 app.get('/api/srs/count', auth, async (req,res)=>{
   const { rows } = await db.q(`SELECT COUNT(*)::int n FROM srs WHERE user_id=$1 AND next_review<=NOW()`,[req.user.id]);
   res.json({ due: rows[0].n });
 });
+
+// ─── Домашка (Homework) ───────────────────────────────────────────────────────
+
+// GET /api/homework — список открытых заданий (stage < 2)
+app.get('/api/homework', auth, async (req,res)=>{
+  const { rows } = await db.q(
+    `SELECT h.word_id, h.stage, h.due_at, h.penalized, w.en, w.ru, w.note, w.synonyms
+     FROM homework h JOIN words w ON w.id=h.word_id
+     WHERE h.user_id=$1 AND h.stage < 2
+     ORDER BY h.due_at ASC`,
+    [req.user.id]
+  );
+  res.json(rows);
+});
+
+// GET /api/homework/count — количество открытых заданий
+app.get('/api/homework/count', auth, async (req,res)=>{
+  const { rows } = await db.q(
+    `SELECT COUNT(*)::int n FROM homework WHERE user_id=$1 AND stage < 2`,
+    [req.user.id]
+  );
+  res.json({ open: rows[0].n });
+});
+
+// POST /api/homework/:wordId/viewed — пользователь открыл слово в справочнике (stage 0 → 1)
+app.post('/api/homework/:wordId/viewed', auth, async (req,res)=>{
+  await db.q(
+    `UPDATE homework SET stage=1 WHERE user_id=$1 AND word_id=$2 AND stage=0`,
+    [req.user.id, req.params.wordId]
+  );
+  res.json({ ok:true });
+});
+
+// POST /api/homework/:wordId/postpone — отложить дедлайн на 24ч (можно не более 3 раз)
+app.post('/api/homework/:wordId/postpone', auth, async (req,res)=>{
+  const hw = (await db.q(
+    `SELECT * FROM homework WHERE user_id=$1 AND word_id=$2 AND stage < 2`,
+    [req.user.id, req.params.wordId]
+  )).rows[0];
+  if(!hw) return res.status(404).json({error:'homework not found'});
+  const postpones = hw.postpone_count || 0;
+  if(postpones >= 3) return res.status(400).json({error:'Лимит откладываний исчерпан (3/3)'});
+  await db.q(
+    `UPDATE homework SET due_at=due_at+'24 hours'::interval, postpone_count=COALESCE(postpone_count,0)+1
+     WHERE user_id=$1 AND word_id=$2`,
+    [req.user.id, req.params.wordId]
+  );
+  res.json({ ok:true, postponesLeft: 2 - postpones });
+});
+
+// ─── Статистика ───────────────────────────────────────────────────────────────
 app.get('/api/stats', auth, async (req,res)=>{
   await applyPenaltiesFor(req.user.id);
   const uid = req.user.id;
   const u = (await db.q('SELECT * FROM users WHERE id=$1',[uid])).rows[0];
-  const agg = (await db.q(`SELECT COALESCE(SUM(answered),0) a, COALESCE(SUM(correct),0) c, COALESCE(SUM(dictations),0) d FROM activity WHERE user_id=$1`,[uid])).rows[0];
-  const modes = (await db.q(`SELECT mode, COUNT(*)::int a, SUM(CASE WHEN correct THEN 1 ELSE 0 END)::int c FROM answers WHERE user_id=$1 GROUP BY mode`,[uid])).rows;
+  const agg = (await db.q(
+    `SELECT COALESCE(SUM(answered),0) a, COALESCE(SUM(correct),0) c, COALESCE(SUM(dictations),0) d
+     FROM activity WHERE user_id=$1`,[uid]
+  )).rows[0];
+  const modes = (await db.q(
+    `SELECT mode, COUNT(*)::int a, SUM(CASE WHEN correct THEN 1 ELSE 0 END)::int c
+     FROM answers WHERE user_id=$1 GROUP BY mode`,[uid]
+  )).rows;
   const m = {'en-ru':{a:0,c:0},'ru-en':{a:0,c:0}};
   modes.forEach(r=>m[r.mode]={a:r.a,c:r.c});
+
+  // График — 7 дней
   const days=[...Array(7)].map((_,i)=>new Date(Date.now()-((6-i)*864e5)).toISOString().slice(0,10));
   const chart=[];
-  for(const d of days){ const a=(await db.q('SELECT COALESCE(points,0) p FROM activity WHERE user_id=$1 AND day=$2',[uid,d])).rows[0]; chart.push({d,p:a?a.p:0}); }
-  const diffs = (await db.q(`SELECT d.difficulty, COUNT(*)::int cnt, SUM(d.correct)::int corr FROM dictations d WHERE d.user_id=$1 GROUP BY d.difficulty`,[uid])).rows;
+  for(const d of days){
+    const a=(await db.q('SELECT COALESCE(points,0) p FROM activity WHERE user_id=$1 AND day=$2',[uid,d])).rows[0];
+    chart.push({d,p:a?a.p:0});
+  }
+
+  // Диктант по сложности
+  const diffs = (await db.q(
+    `SELECT d.difficulty, COUNT(*)::int cnt, SUM(d.correct)::int corr FROM dictations d WHERE d.user_id=$1 GROUP BY d.difficulty`,[uid]
+  )).rows;
   const byDiff = {1:{n:0,c:0},2:{n:0,c:0},3:{n:0,c:0}};
   diffs.forEach(r=>{ if(r.difficulty) byDiff[r.difficulty]={n:r.cnt,c:r.corr}; });
-  res.json({ rating:u.rating, streak:u.streak, answered:+agg.a, correct:+agg.c, dictations:+agg.d, modes:m, chart, byDiff });
+
+  // 📊 Статистика карточек: суммарные known/unknown из srs
+  const cardAgg = (await db.q(
+    `SELECT COALESCE(SUM(known_count),0)::int total_known,
+            COALESCE(SUM(unknown_count),0)::int total_unknown
+     FROM srs WHERE user_id=$1`,[uid]
+  )).rows[0];
+
+  // Топ-10 «упрямых» слов (самый большой unknown_count)
+  const stubbornRows = (await db.q(
+    `SELECT w.en, w.ru, s.unknown_count, s.known_count
+     FROM srs s JOIN words w ON w.id=s.word_id
+     WHERE s.user_id=$1 AND s.unknown_count > 0
+     ORDER BY s.unknown_count DESC LIMIT 10`,[uid]
+  )).rows;
+
+  // Статистика домашки
+  const hwStats = (await db.q(
+    `SELECT
+       COUNT(*)::int total,
+       SUM(CASE WHEN stage=2 THEN 1 ELSE 0 END)::int done,
+       SUM(CASE WHEN stage < 2 THEN 1 ELSE 0 END)::int open
+     FROM homework WHERE user_id=$1`,[uid]
+  )).rows[0];
+
+  res.json({
+    rating: u.rating,
+    streak: u.streak,
+    answered: +agg.a,
+    correct: +agg.c,
+    dictations: +agg.d,
+    modes: m,
+    chart,
+    byDiff,
+    cards: {
+      totalKnown:   cardAgg.total_known,
+      totalUnknown: cardAgg.total_unknown,
+      stubborn:     stubbornRows
+    },
+    homework: hwStats
+  });
 });
+
+// ─── Турнир ──────────────────────────────────────────────────────────────────
 function periodRange(p){
   const t=today(), now=new Date();
   if(p==='day') return [t,t];
@@ -186,9 +406,15 @@ function periodRange(p){
 }
 app.get('/api/tournament', auth, async (req,res)=>{
   const [start,end]=periodRange(req.query.period||'day');
-  const { rows } = await db.q(`SELECT u.id,u.first_name,u.username,u.streak, COALESCE(SUM(a.points),0)::int pts FROM users u LEFT JOIN activity a ON a.user_id=u.id AND a.day BETWEEN $1 AND $2 GROUP BY u.id ORDER BY pts DESC`,[start,end]);
+  const { rows } = await db.q(
+    `SELECT u.id,u.first_name,u.username,u.streak, COALESCE(SUM(a.points),0)::int pts
+     FROM users u LEFT JOIN activity a ON a.user_id=u.id AND a.day BETWEEN $1 AND $2
+     GROUP BY u.id ORDER BY pts DESC`,[start,end]
+  );
   res.json(rows.map(r=>({ id:r.id, name:(r.first_name||r.username||'User'), streak:r.streak, pts:r.pts, me:r.id===req.user.id })));
 });
+
+// ─── Прочее ──────────────────────────────────────────────────────────────────
 app.get('/api/changelog',(req,res)=>res.json(CHANGELOG));
 app.post('/api/broadcast', auth, adminOnly, async (req,res)=>{
   const chatId = await getBroadcastChat();
@@ -201,6 +427,8 @@ async function getBroadcastChat(){
   const r=(await db.q("SELECT value FROM settings WHERE key='broadcast_chat_id'")).rows[0];
   return r?r.value:null;
 }
+
+// ─── Telegram Webhook ────────────────────────────────────────────────────────
 app.post('/telegram/webhook', async (req,res)=>{
   res.sendStatus(200);
   const msg = req.body?.message; if(!msg) return;
@@ -221,6 +449,8 @@ app.post('/telegram/webhook', async (req,res)=>{
   if(text.startsWith('/version')) return tg.sendMessage(chatId,`📦 StudyСПб v${VERSION}`);
   if(text.startsWith('/help')) return tg.sendMessage(chatId,'Команды:\n/start — приветствие\n/version — версия\n/setbroadcast — (админ) привязать группу\n/broadcast <текст> — (админ) рассылка');
 });
+
+// ─── Планировщик ─────────────────────────────────────────────────────────────
 let lastBroadcast='';
 setInterval(async ()=>{
   try{
@@ -232,12 +462,16 @@ setInterval(async ()=>{
     if(mskHour === REMIND_HOUR_MOSCOW && mskMin < 2 && lastBroadcast !== dayKey){
       const chat = await getBroadcastChat();
       if(chat){
-        await tg.sendMessage(chat, `⏰ <b>StudyСПб: время ежедневного диктанта!</b>\n\nПройди хотя бы один диктант в течение 24 часов, иначе −50 очков.\n\n🔥 Сохрани стрик!`);
+        await tg.sendMessage(chat,
+          `⏰ <b>StudyСПб: время ежедневного диктанта!</b>\n\nПройди хотя бы один диктант в течение 24 часов, иначе −1500 очков.\n\n🔥 Сохрани стрик!`
+        );
         lastBroadcast = dayKey;
       }
     }
   }catch(e){ console.error('scheduler',e.message); }
 }, 30000);
+
+// ─── Запуск ───────────────────────────────────────────────────────────────────
 (async ()=>{
   await db.init();
   if(process.env.PUBLIC_URL) await tg.setWebhook(process.env.PUBLIC_URL+'/telegram/webhook').catch(()=>{});
