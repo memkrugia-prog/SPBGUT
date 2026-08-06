@@ -63,6 +63,24 @@ function adminOnly(req,res,next){ if(!req.user.is_admin) return res.status(403).
 
 /* ─── auth routes ─── */
 app.get('/api/config',(req,res)=>res.json({ botUsername:process.env.BOT_USERNAME, version:VERSION }));
+app.get('/auth/telegram', async (req,res)=>{
+  try{
+    const data = req.query;
+    if(!tg.verifyAuth(data)) return res.redirect('/?error=bad_hash');
+    const isAdmin = ADMIN_IDS.includes(Number(data.id));
+    const count = (await db.q('SELECT COUNT(*)::int n FROM users')).rows[0].n;
+    const makeAdmin = isAdmin || count===0;
+    await db.q(`INSERT INTO users(tg_id,username,first_name,last_name,photo,is_admin,last_check)
+      VALUES($1,$2,$3,$4,$5,$6,CURRENT_DATE)
+      ON CONFLICT(tg_id) DO UPDATE SET username=EXCLUDED.username,first_name=EXCLUDED.first_name,
+        last_name=EXCLUDED.last_name,photo=EXCLUDED.photo`,
+      [data.id,data.username||null,data.first_name||null,data.last_name||null,data.photo_url||null,makeAdmin]);
+    const u = (await db.q('SELECT * FROM users WHERE tg_id=$1',[data.id])).rows[0];
+    const token = await createSession(u.id);
+    res.cookie('sid',token,{ httpOnly:true, sameSite:'lax', maxAge:30*864e5, secure:process.env.NODE_ENV==='production' });
+    res.redirect('/');
+  }catch(e){ console.error('auth error',e); res.redirect('/?error=server'); }
+});
 
 app.post('/auth/telegram', async (req,res)=>{
   try{
