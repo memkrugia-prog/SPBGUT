@@ -5,7 +5,6 @@ require('dotenv').config();
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
 const q = (text, params) => pool.query(text, params);
 
-// [en, ru, note (развёрнутый нюанс), difficulty 1=easy 2=med 3=hard, synonyms]
 const SEED = [
  ["assume","предполагать / принимать на себя","assumed role = принятая роль, а не «предполагаемая». Ложный друг переводчика!",2,"допускать, брать на себя"],
  ["since","с (момента) / поскольку","since 2020 = с 2020 года (Present Perfect); since you are here = поскольку ты здесь",1,"так как"],
