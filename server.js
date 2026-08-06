@@ -74,21 +74,22 @@ function adminOnly(req,res,next){ if(!req.user.is_admin) return res.status(403).
 app.get('/api/config',(req,res)=>res.json({ botUsername:process.env.BOT_USERNAME, version:VERSION }));
 
 app.post('/auth/telegram', async (req,res)=>{
-  const data = req.body;
-  if(!tg.verifyAuth(data)) return res.status(400).json({error:'bad hash'});
-  const isAdmin = ADMIN_IDS.includes(Number(data.id));
-  // первый пользователь тоже становится админом
-  const count = (await db.q('SELECT COUNT(*)::int n FROM users')).rows[0].n;
-  const makeAdmin = isAdmin || count===0;
-  await db.q(`INSERT INTO users(tg_id,username,first_name,last_name,photo,is_admin,last_check)
-    VALUES($1,$2,$3,$4,$5,$6,CURRENT_DATE)
-    ON CONFLICT(tg_id) DO UPDATE SET username=EXCLUDED.username,first_name=EXCLUDED.first_name,
-      last_name=EXCLUDED.last_name,photo=EXCLUDED.photo`,
-    [data.id,data.username||null,data.first_name||null,data.last_name||null,data.photo_url||null,makeAdmin]);
-  const u = (await db.q('SELECT * FROM users WHERE tg_id=$1',[data.id])).rows[0];
-  const token = await createSession(u.id);
-  res.cookie('sid',token,{ httpOnly:true, sameSite:'lax', maxAge:30*864e5, secure:process.env.NODE_ENV==='production' });
-  res.json({ user:{ id:u.id, name:(u.first_name||u.username||'User'), username:u.username, isAdmin:u.is_admin } });
+  try{
+    const data = req.body;
+    if(!tg.verifyAuth(data)) return res.status(400).json({error:'bad hash'});
+    const isAdmin = ADMIN_IDS.includes(Number(data.id));
+    const count = (await db.q('SELECT COUNT(*)::int n FROM users')).rows[0].n;
+    const makeAdmin = isAdmin || count===0;
+    await db.q(`INSERT INTO users(tg_id,username,first_name,last_name,photo,is_admin,last_check)
+      VALUES($1,$2,$3,$4,$5,$6,CURRENT_DATE)
+      ON CONFLICT(tg_id) DO UPDATE SET username=EXCLUDED.username,first_name=EXCLUDED.first_name,
+        last_name=EXCLUDED.last_name,photo=EXCLUDED.photo`,
+      [data.id,data.username||null,data.first_name||null,data.last_name||null,data.photo_url||null,makeAdmin]);
+    const u = (await db.q('SELECT * FROM users WHERE tg_id=$1',[data.id])).rows[0];
+    const token = await createSession(u.id);
+    res.cookie('sid',token,{ httpOnly:true, sameSite:'lax', maxAge:30*864e5, secure:process.env.NODE_ENV==='production' });
+    res.json({ user:{ id:u.id, name:(u.first_name||u.username||'User'), username:u.username, isAdmin:u.is_admin } });
+  }catch(e){ console.error('auth error',e); res.status(500).json({error:'server error'}); }
 });
 
 app.post('/auth/logout',(req,res)=>{ res.clearCookie('sid'); res.json({ok:true}); });
@@ -99,7 +100,7 @@ app.get('/api/me', auth, async (req,res)=>{
   res.json({ user:{ id:u.id, name:(u.first_name||u.username||'User'), username:u.username, isAdmin:u.is_admin, rating:u.rating, streak:u.streak } });
 });
 
-/* ─── words ─── */
+/* ─── words ── */
 app.get('/api/words', auth, async (req,res)=>{
   const { rows } = await db.q('SELECT * FROM words ORDER BY id DESC');
   res.json(rows);
@@ -130,7 +131,6 @@ app.post('/api/dictation', auth, async (req,res)=>{
   await addRating(req.user.id,bonus);
   await addActivity(req.user.id,{points:bonus,dictations:1});
   await db.q('INSERT INTO dictations(user_id,total,correct,points) VALUES($1,$2,$3,$4)',[req.user.id,total,correct,bonus]);
-  // стрик
   const u = (await db.q('SELECT * FROM users WHERE id=$1',[req.user.id])).rows[0];
   const t = today();
   if(u.last_dict_date !== t){
@@ -209,10 +209,8 @@ let lastRemind=''; let lastMaint='';
 setInterval(async ()=>{
   try{
     const now=new Date(); const t=today();
-    // ежедневное обслуживание: штрафы всем
     if(lastMaint!==t){ lastMaint=t; const us=(await db.q('SELECT id FROM users')).rows; for(const u of us) await applyPenalties(u.id); }
-    // напоминание
-    const remindHour = 19; // можно вынести в env
+    const remindHour = 19;
     if(now.getHours()>=remindHour && lastRemind!==t){
       const chat=await getBroadcastChat();
       if(chat){ await tg.sendMessage(chat,'📚 StudyСПб: не забудьте пройти диктант сегодня, иначе −50 очков!'); lastRemind=t; }
@@ -223,7 +221,6 @@ setInterval(async ()=>{
 /* ─── start ─── */
 (async ()=>{
   await db.init();
-  // авто-установка webhook, если задан публичный домен
   if(process.env.PUBLIC_URL) await tg.setWebhook(process.env.PUBLIC_URL+'/telegram/webhook').catch(()=>{});
   app.listen(PORT,()=>console.log('StudyСПб запущен на',PORT));
 })();
