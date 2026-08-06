@@ -20,7 +20,7 @@ const CHANGELOG = [
    '🃏 Карточки с переворотом + бесконечный режим',
    '🧠 SRS: сложные слова возвращаются через 10мин→1ч→6ч→24ч→3д→7д',
    '📖 Развёрнутые нюансы и синонимы у всех слов',
-   '🟢🔴 Баланс сложности: 36 лёгких / 28 средних / 16 сложных',
+   '🟢 Баланс сложности: 36 лёгких / 28 средних / 16 сложных',
    '🔤 Читабельный шрифт Manrope' ]},
  { v:'0.3.1', date:'ранее', notes:['Авто-рассылка changelog при деплое', 'Команда /version'] },
  { v:'0.3.0', date:'ранее', notes:['Рассылка в 19:00 МСК', 'Таймер 24ч', 'Категории сложности'] },
@@ -152,7 +152,6 @@ app.post('/api/answer', auth, async (req,res)=>{
   const pts = correct?10:0;
   if(pts) await addRating(req.user.id,pts);
   await addActivity(req.user.id,{points:pts,answered:1,correct:correct?1:0});
-  // SRS: ошибка → слово в очередь повторения, верно → выходит из неё
   if(!correct){
     const cur = (await db.q('SELECT errors FROM srs WHERE user_id=$1 AND word_id=$2',[req.user.id,word_id])).rows[0];
     const e = (cur?cur.errors:0)+1;
@@ -218,9 +217,7 @@ function periodRange(p){
 }
 app.get('/api/tournament', auth, async (req,res)=>{
   const [start,end]=periodRange(req.query.period||'day');
-  const { rows } = await db.q(`SELECT u.id,u.first_name,u.username,u.streak, COALESCE(SUM(a.points),0)::int pts
-    FROM users u LEFT JOIN activity a ON a.user_id=u.id AND a.day BETWEEN $1 AND $2
-    GROUP BY u.id ORDER BY pts DESC`,[start,end]);
+  const { rows } = await db.q(`SELECT u.id,u.first_name,u.username,u.streak, COALESCE(SUM(a.points),0)::int pts FROM users u LEFT JOIN activity a ON a.user_id=u.id AND a.day BETWEEN $1 AND $2 GROUP BY u.id ORDER BY pts DESC`,[start,end]);
   res.json(rows.map(r=>({ id:r.id, name:(r.first_name||r.username||'User'), streak:r.streak, pts:r.pts, me:r.id===req.user.id })));
 });
 
@@ -245,53 +242,4 @@ app.post('/telegram/webhook', async (req,res)=>{
     const u=(await db.q('SELECT is_admin FROM users WHERE tg_id=$1',[from.id])).rows[0];
     if(!u||!u.is_admin) return tg.sendMessage(chatId,'⛔ Только админ.');
     await db.q("INSERT INTO settings(key,value) VALUES('broadcast_chat_id',$1) ON CONFLICT(key) DO UPDATE SET value=$1",[String(chatId)]);
-    return tg.sendMessage(chatId,'✅ Группа привязана.');
-  }
-  if(text.startsWith('/broadcast')){
-    const u=(await db.q('SELECT is_admin FROM users WHERE tg_id=$1',[from.id])).rows[0];
-    if(!u||!u.is_admin) return;
-    const m=text.replace('/broadcast','').trim(); const target=await getBroadcastChat();
-    if(target&&m) return tg.sendMessage(target,m);
-  }
-  if(text.startsWith('/start')) return tg.sendMessage(chatId,`Привет, ${from.first_name}! Это бот StudyСПб 📚`);
-  if(text.startsWith('/version')) return tg.sendMessage(chatId,`📦 StudyСПб v${VERSION}`);
-  if(text.startsWith('/help')) return tg.sendMessage(chatId,'Команды:\n/start — приветствие\n/version — текущая версия\n/setbroadcast — (админ) привязать группу\n/broadcast <текст> — (админ) рассылка');
-});
-
-let lastBroadcast='';
-setInterval(async ()=>{
-  try{
-    const now = new Date();
-    const mskHour = (now.getUTCHours() + MOSCOW_OFFSET) % 24;
-    const mskMin = now.getUTCMinutes();
-    const dayKey = now.toISOString().slice(0,10);
-    await applyAllPenalties();
-    if(mskHour === REMIND_HOUR_MOSCOW && mskMin < 2 && lastBroadcast !== dayKey){
-      const chat = await getBroadcastChat();
-      if(chat){
-        await tg.sendMessage(chat, `⏰ <b>StudyСПб: время ежедневного диктанта!</b>\n\nНе забудь пройти хотя бы один диктант в течение 24 часов, иначе потеряешь −50 очков рейтинга.\n\n🔥 Сохрани свой стрик!`);
-        lastBroadcast = dayKey;
-      }
-    }
-  }catch(e){ console.error('scheduler',e.message); }
-}, 30000);
-
-(async ()=>{
-  await db.init();
-  if(process.env.PUBLIC_URL) await tg.setWebhook(process.env.PUBLIC_URL+'/telegram/webhook').catch(()=>{});
-  try{
-    const last = (await db.q("SELECT value FROM settings WHERE key='last_broadcast_version'")).rows[0];
-    const lastVersion = last ? last.value : '';
-    if(lastVersion !== VERSION){
-      const chat = await getBroadcastChat();
-      if(chat){
-        const latest = CHANGELOG[0];
-        const msg = `🚀 <b>StudyСПб обновился до v${latest.v}</b>\n\n${latest.notes.map(n=>'• '+n).join('\n')}\n\nОткрой сайт и попробуй новые функции!`;
-        await tg.sendMessage(chat, msg);
-        console.log('Broadcast changelog for v'+VERSION);
-      }
-      await db.q("INSERT INTO settings(key,value) VALUES('last_broadcast_version',$1) ON CONFLICT(key) DO UPDATE SET value=$1",[VERSION]);
-    }
-  }catch(e){ console.error('changelog broadcast error',e.message); }
-  app.listen(PORT,()=>console.log('StudyСПб v'+VERSION+' запущен на',PORT,'| напоминание в',REMIND_HOUR_MOSCOW,':00 МСК'));
-})();
+    return tg.sendMessage(chatId,'✅ Группа привяз
