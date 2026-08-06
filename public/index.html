@@ -245,7 +245,7 @@ async function boot(){
 
   // Редирект-кнопка вместо попапа (работает во всех браузерах)
   const returnTo = location.origin + '/auth/telegram';
-  const loginUrl = 'https://oauth.telegram.org/auth?bot=' + encodeURIComponent(cfg.botUsername)
+  const loginUrl = 'https://oauth.telegram.org/auth?bot_id=' + encodeURIComponent(cfg.botId)
     + '&origin=' + encodeURIComponent(location.origin)
     + '&return_to=' + encodeURIComponent(returnTo)
     + '&request_access=write&embed=0';
