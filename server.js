@@ -11,25 +11,25 @@ app.use(cookieParser());
 app.use(express.static(path.join(__dirname,'public')));
 const PORT = process.env.PORT || 3000;
 const ADMIN_IDS = (process.env.ADMIN_TG_IDS||'').split(',').map(s=>s.trim()).filter(Boolean).map(Number);
-const VERSION = '0.3.1';
+const VERSION = '0.4.0';
 const REMIND_HOUR_MOSCOW = parseInt(process.env.REMIND_HOUR || '19');
 const MOSCOW_OFFSET = 3;
 
 const CHANGELOG = [
- { v:'0.3.1', date:'сегодня', notes:[
-   'Авто-рассылка changelog при каждом деплое',
-   'Команда /version в боте',
-   'Расширенные нюансы для всех слов' ]},
- { v:'0.3.0', date:'ранее', notes:[
-   'Автоматическая рассылка в 19:00 МСК',
-   'Обратный отсчёт 24 часа до штрафа',
-   'Категории сложности',
-   'Множественные переводы и синонимы' ]},
+ { v:'0.4.0', date:'сегодня', notes:[
+   '🃏 Карточки с переворотом + бесконечный режим',
+   '🧠 SRS: сложные слова возвращаются через 10мин→1ч→6ч→24ч→3д→7д',
+   '📖 Развёрнутые нюансы и синонимы у всех слов',
+   '🟢🔴 Баланс сложности: 36 лёгких / 28 средних / 16 сложных',
+   '🔤 Читабельный шрифт Manrope' ]},
+ { v:'0.3.1', date:'ранее', notes:['Авто-рассылка changelog при деплое', 'Команда /version'] },
+ { v:'0.3.0', date:'ранее', notes:['Рассылка в 19:00 МСК', 'Таймер 24ч', 'Категории сложности'] },
  { v:'0.2.0', date:'ранее', notes:['Railway + PostgreSQL, Telegram OAuth'] },
  { v:'0.1.0', date:'ранее', notes:['Первый релиз'] }
 ];
 
 const today = () => new Date().toISOString().slice(0,10);
+const addDays = (d,n) => { const x=new Date(d+'T00:00:00'); x.setDate(x.getDate()+n); return x.toISOString().slice(0,10); };
 
 async function applyPenaltiesFor(userId){
   const u = (await db.q('SELECT * FROM users WHERE id=$1',[userId])).rows[0];
@@ -37,9 +37,7 @@ async function applyPenaltiesFor(userId){
   const diff = (Date.now() - new Date(u.last_dict_at).getTime()) / 36e5;
   if(diff > 24){
     const missCount = Math.floor(diff / 24) - 1;
-    if(missCount > 0){
-      await db.q('UPDATE users SET rating=GREATEST(0,rating-$1) WHERE id=$2',[missCount*50,userId]);
-    }
+    if(missCount > 0) await db.q('UPDATE users SET rating=GREATEST(0,rating-$1) WHERE id=$2',[missCount*50,userId]);
   }
 }
 async function applyAllPenalties(){
@@ -75,8 +73,7 @@ function adminOnly(req,res,next){ if(!req.user.is_admin) return res.status(403).
 
 app.get('/api/config',(req,res)=>{
   const tokenParts = (process.env.BOT_TOKEN||'').split(':');
-  const botId = tokenParts[0] || '';
-  res.json({ botUsername:process.env.BOT_USERNAME, botId, version:VERSION, remindHour:REMIND_HOUR_MOSCOW });
+  res.json({ botUsername:process.env.BOT_USERNAME, botId:tokenParts[0]||'', version:VERSION, remindHour:REMIND_HOUR_MOSCOW });
 });
 
 app.get('/auth/telegram', async (req,res)=>{
@@ -123,25 +120,17 @@ app.get('/api/me', auth, async (req,res)=>{
   await applyPenaltiesFor(req.user.id);
   const u = (await db.q('SELECT * FROM users WHERE id=$1',[req.user.id])).rows[0];
   let nextDeadline = null;
-  if(u.last_dict_at){
-    nextDeadline = new Date(u.last_dict_at).getTime() + 24*36e5;
-  }
+  if(u.last_dict_at) nextDeadline = new Date(u.last_dict_at).getTime() + 24*36e5;
   res.json({
     user:{ id:u.id, name:(u.first_name||u.username||'User'), username:u.username, isAdmin:u.is_admin, rating:u.rating, streak:u.streak },
-    lastDictAt: u.last_dict_at,
-    nextDeadline,
-    remindHour: REMIND_HOUR_MOSCOW
+    lastDictAt: u.last_dict_at, nextDeadline, remindHour: REMIND_HOUR_MOSCOW
   });
 });
 
 app.get('/api/words', auth, async (req,res)=>{
   const diff = req.query.difficulty;
-  let q_str = 'SELECT * FROM words';
-  let params = [];
-  if(diff && diff!=='all'){
-    q_str += ' WHERE difficulty=$1';
-    params.push(parseInt(diff));
-  }
+  let q_str = 'SELECT * FROM words'; const params = [];
+  if(diff && diff!=='all'){ q_str += ' WHERE difficulty=$1'; params.push(parseInt(diff)); }
   q_str += ' ORDER BY id DESC';
   const { rows } = await db.q(q_str, params);
   res.json(rows);
@@ -162,8 +151,8 @@ app.post('/api/answer', auth, async (req,res)=>{
   await db.q('INSERT INTO answers(user_id,word_id,mode,correct) VALUES($1,$2,$3,$4)',[req.user.id,word_id,mode,correct]);
   const pts = correct?10:0;
   if(pts) await addRating(req.user.id,pts);
-    await addActivity(req.user.id,{points:pts,answered:1,correct:correct?1:0});
-  // SRS: ошибка → слово попадает в повторение, верно → выходит из очереди
+  await addActivity(req.user.id,{points:pts,answered:1,correct:correct?1:0});
+  // SRS: ошибка → слово в очередь повторения, верно → выходит из неё
   if(!correct){
     const cur = (await db.q('SELECT errors FROM srs WHERE user_id=$1 AND word_id=$2',[req.user.id,word_id])).rows[0];
     const e = (cur?cur.errors:0)+1;
@@ -181,20 +170,26 @@ app.post('/api/answer', auth, async (req,res)=>{
 app.post('/api/dictation', auth, async (req,res)=>{
   const { total, correct, difficulty } = req.body;
   let bonus = 20; if(correct===total) bonus+=30;
-  if(difficulty==3) bonus += 15;
-  else if(difficulty==2) bonus += 5;
+  if(difficulty==3) bonus += 15; else if(difficulty==2) bonus += 5;
   await addRating(req.user.id,bonus);
   await addActivity(req.user.id,{points:bonus,dictations:1});
   await db.q('INSERT INTO dictations(user_id,total,correct,points,difficulty) VALUES($1,$2,$3,$4,$5)',[req.user.id,total,correct,bonus,difficulty||2]);
-  await db.q('UPDATE users SET last_dict_at=NOW() WHERE id=$1',[req.user.id]);
   const u = (await db.q('SELECT * FROM users WHERE id=$1',[req.user.id])).rows[0];
   const t = today();
-  const lastDay = u.last_dict_at ? u.last_dict_at.toISOString().slice(0,10) : null;
-  if(lastDay !== t){
-    const streak = (lastDay === new Date(Date.now()-864e5).toISOString().slice(0,10)) ? u.streak+1 : 1;
-    await db.q('UPDATE users SET streak=$1 WHERE id=$2',[streak,req.user.id]);
-  }
+  const lastDay = u.last_dict_at ? new Date(u.last_dict_at).toISOString().slice(0,10) : null;
+  let streak = u.streak;
+  if(lastDay !== t) streak = (lastDay === addDays(t,-1)) ? u.streak+1 : 1;
+  await db.q('UPDATE users SET last_dict_at=NOW(), streak=$2 WHERE id=$1',[req.user.id,streak]);
   res.json({ bonus });
+});
+
+app.get('/api/srs/due', auth, async (req,res)=>{
+  const { rows } = await db.q(`SELECT w.* FROM srs s JOIN words w ON w.id=s.word_id WHERE s.user_id=$1 AND s.next_review<=NOW() ORDER BY s.errors DESC LIMIT 20`,[req.user.id]);
+  res.json(rows);
+});
+app.get('/api/srs/count', auth, async (req,res)=>{
+  const { rows } = await db.q(`SELECT COUNT(*)::int n FROM srs WHERE user_id=$1 AND next_review<=NOW()`,[req.user.id]);
+  res.json({ due: rows[0].n });
 });
 
 app.get('/api/stats', auth, async (req,res)=>{
@@ -228,14 +223,7 @@ app.get('/api/tournament', auth, async (req,res)=>{
     GROUP BY u.id ORDER BY pts DESC`,[start,end]);
   res.json(rows.map(r=>({ id:r.id, name:(r.first_name||r.username||'User'), streak:r.streak, pts:r.pts, me:r.id===req.user.id })));
 });
-app.get('/api/srs/due', auth, async (req,res)=>{
-  const { rows } = await db.q(`SELECT w.* FROM srs s JOIN words w ON w.id=s.word_id WHERE s.user_id=$1 AND s.next_review<=NOW() ORDER BY s.errors DESC LIMIT 20`,[req.user.id]);
-  res.json(rows);
-});
-app.get('/api/srs/count', auth, async (req,res)=>{
-  const { rows } = await db.q(`SELECT COUNT(*)::int n FROM srs WHERE user_id=$1 AND next_review<=NOW()`,[req.user.id]);
-  res.json({ due: rows[0].n });
-});
+
 app.get('/api/changelog',(req,res)=>res.json(CHANGELOG));
 app.post('/api/broadcast', auth, adminOnly, async (req,res)=>{
   const chatId = await getBroadcastChat();
