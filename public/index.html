@@ -82,6 +82,9 @@ select.fi{cursor:pointer}
 .timer-label{font-size:12px;font-weight:600;color:var(--mut);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
 .timer-value{font-family:'Manrope',sans-serif;font-size:32px;font-weight:800;color:var(--p700)}
 .timer-warn{color:var(--warn)}.timer-danger{color:var(--err)}.timer-ok{color:var(--ok)}
+.hw-badge{display:inline-flex;align-items:center;justify-content:center;background:var(--err);color:#fff;font-size:10px;font-weight:700;border-radius:10px;padding:1px 6px;margin-left:5px;min-width:18px;line-height:16px}
+.hw-card{background:var(--white);border-radius:var(--radius);padding:20px;border:1px solid rgba(124,58,237,.07);box-shadow:var(--shadow);margin-bottom:14px}
+.hw-stage0{border-left:3px solid var(--warn)}.hw-stage1{border-left:3px solid var(--p500)}
 @media(max-width:640px){.hin{flex-wrap:wrap;height:auto;padding:10px 14px}main{padding:22px 14px}}
 </style>
 </head>
@@ -100,6 +103,7 @@ select.fi{cursor:pointer}
     <button class="nb active" data-v="dictionary">Словарь</button>
     <button class="nb" data-v="dictation">Диктант</button>
     <button class="nb" data-v="cards">Карточки</button>
+    <button class="nb" data-v="homework">Домашка<span class="hw-badge" id="hwBadge" style="display:none"></span></button>
     <button class="nb" data-v="tournament">Турнир</button>
     <button class="nb" data-v="stats">Статистика</button>
     <button class="nb" data-v="settings">Настройки</button>
@@ -130,7 +134,7 @@ select.fi{cursor:pointer}
     <div style="max-width:640px;margin:0 auto">
       <div id="dSetup" class="card" style="text-align:center">
         <div style="font-family:'Manrope';font-size:26px;font-weight:800">Диктант</div>
-        <div style="color:var(--mut);font-size:14px;margin:6px 0 28px">Минимум один за 24 часа, иначе −50 очков</div>
+        <div style="color:var(--mut);font-size:14px;margin:6px 0 28px">Минимум один за 24 часа, иначе −1500 очков</div>
         <div style="text-align:left;font-size:12px;font-weight:600;color:var(--mut);margin-bottom:10px">НАПРАВЛЕНИЕ</div>
         <div style="display:flex;gap:10px;margin-bottom:22px">
           <button class="opt sel" data-dir="en-ru" onclick="selDir(this)">EN → RU</button>
@@ -228,6 +232,17 @@ select.fi{cursor:pointer}
     </div>
   </div>
 
+  <div id="view-homework" class="view">
+    <div style="max-width:640px;margin:0 auto">
+      <div style="font-family:'Manrope';font-size:26px;font-weight:800;margin-bottom:6px">📚 Домашка</div>
+      <div style="color:var(--mut);font-size:14px;margin-bottom:22px">Слова, которые ты не знал на карточках. Выучи в справочнике → пройди тест. Просрочишь — −100 рейтинга.</div>
+      <div id="hwList"></div>
+      <div id="hwEmpty" style="display:none;text-align:center;padding:48px 20px;color:var(--mut)">
+        🎉 <br><br>Все задания выполнены!<br><br>Продолжай работать с карточками.
+      </div>
+    </div>
+  </div>
+
   <div id="view-tournament" class="view">
     <div style="max-width:720px;margin:0 auto" class="card">
       <div style="font-family:'Manrope';font-size:19px;font-weight:800;margin-bottom:14px">🏆 Турнир</div>
@@ -258,11 +273,40 @@ select.fi{cursor:pointer}
         <tr><td><span class="diff-badge diff-2">🟡 Средние</span></td><td id="d2n"></td><td id="d2c"></td><td id="d2p"></td></tr>
         <tr><td><span class="diff-badge diff-3">🔴 Сложные</span></td><td id="d3n"></td><td id="d3c"></td><td id="d3p"></td></tr></table>
       </div>
-      <div class="card"><div style="font-family:'Manrope';font-size:18px;font-weight:800;margin-bottom:12px">По режимам</div>
+      <div class="card" style="margin-bottom:18px"><div style="font-family:'Manrope';font-size:18px;font-weight:800;margin-bottom:12px">По режимам</div>
         <table><tr><th>Режим</th><th>Решено</th><th>Верно</th><th>%</th></tr>
         <tr><td>EN → RU</td><td id="m1a"></td><td id="m1c"></td><td id="m1p"></td></tr>
         <tr><td>RU → EN</td><td id="m2a"></td><td id="m2c"></td><td id="m2p"></td></tr></table>
-        <div style="font-size:12px;color:var(--mut);margin-top:12px">Очки: верный +10 · диктант +20 · идеальный +30 · сложные +15 · пропуск 24ч −50</div>
+        <div style="font-size:12px;color:var(--mut);margin-top:12px">Очки: верный +10 · диктант +20 · идеальный +30 · сложные +15 · пропуск 24ч −1500</div>
+      </div>
+      <div class="card" style="margin-bottom:18px">
+        <div style="font-family:'Manrope';font-size:18px;font-weight:800;margin-bottom:12px">🃏 Карточки</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
+          <div style="background:var(--okbg);border-radius:14px;padding:16px;text-align:center">
+            <div class="scn" id="cKnown" style="color:var(--ok)">0</div>
+            <div class="scl">Узнано</div>
+          </div>
+          <div style="background:var(--errbg);border-radius:14px;padding:16px;text-align:center">
+            <div class="scn" id="cUnknown" style="color:var(--err)">0</div>
+            <div class="scl">Не узнано</div>
+          </div>
+        </div>
+        <div style="font-family:'Manrope';font-size:14px;font-weight:700;color:var(--sec);margin-bottom:8px">🔥 Самые упрямые слова</div>
+        <div id="stubborn" style="font-size:13px;color:var(--sec)"></div>
+      </div>
+      <div class="card">
+        <div style="font-family:'Manrope';font-size:18px;font-weight:800;margin-bottom:12px">📚 Домашка</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+          <div style="text-align:center;padding:12px;background:var(--b50);border-radius:12px">
+            <div class="scn" id="hwTotal" style="font-size:22px">0</div><div class="scl">Всего</div>
+          </div>
+          <div style="text-align:center;padding:12px;background:var(--okbg);border-radius:12px">
+            <div class="scn" id="hwDone" style="font-size:22px;color:var(--ok)">0</div><div class="scl">Закрыто</div>
+          </div>
+          <div style="text-align:center;padding:12px;background:var(--errbg);border-radius:12px">
+            <div class="scn" id="hwOpen" style="font-size:22px;color:var(--err)">0</div><div class="scl">Открыто</div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -303,7 +347,7 @@ select.fi{cursor:pointer}
 <script>
 let ME=null, ME_DATA=null, WORDS=[], cfg={}, period='day', wordDiff='all';
 let D={dir:'en-ru',count:'5',diff:'all',queue:[],i:0,res:[],answered:false};
-let CD={diff:'all',queue:[],i:0,flipped:false,session:0,known:0,infinite:true};
+let CD={diff:'all',queue:[],i:0,flipped:false,session:0,known:0,unknown:0,infinite:true};
 const $=id=>document.getElementById(id);
 const esc=s=>{const d=document.createElement('div');d.textContent=s;return d.innerHTML};
 const norm=s=>s.toLowerCase().trim().replace(/[.,!?;:()«»"'\/\-–—]/g,' ').replace(/\s+/g,' ').trim();
@@ -320,7 +364,7 @@ async function init(){
   showApp(); $('uname').textContent=ME.name+(ME.isAdmin?' ⭐':'');
   if(!ME.isAdmin) $('adminPanel').style.display='none';
   if($('remindHourDisplay')) $('remindHourDisplay').textContent=String(cfg.remindHour||19).padStart(2,'0')+':00';
-  WORDS=await api('/api/words'); renderWords(); loadChangelog(); loadDueCount();
+  WORDS=await api('/api/words'); renderWords(); loadChangelog(); loadDueCount(); loadHomework();
   switchView('dictionary');
   updateTimer(); setInterval(updateTimer,1000);
 }
@@ -375,7 +419,7 @@ function switchView(v){
   document.querySelectorAll('.nb').forEach(b=>b.classList.toggle('active',b.dataset.v===v));
   document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
   $('view-'+v).classList.add('active');
-  if(v==='stats') loadStats(); if(v==='tournament') loadTournament(); if(v==='dictation') toSetup(); if(v==='cards') loadDueCount();
+  if(v==='stats') loadStats(); if(v==='tournament') loadTournament(); if(v==='dictation') toSetup(); if(v==='cards') loadDueCount(); if(v==='homework') loadHomework();
 }
 document.querySelectorAll('.nb').forEach(b=>b.onclick=()=>switchView(b.dataset.v));
 
@@ -433,7 +477,7 @@ function isOk(u,w){
   const all = targets.flatMap(t=>(t||'').split('/')).map(norm).filter(Boolean);
   return all.some(v=>us===v||us.includes(v)||v.includes(us));
 }
-async function answer(ok,w,mode){ await api('/api/answer',{method:'POST',body:JSON.stringify({word_id:w.id,mode:mode,correct:ok})}); }
+async function answer(ok,w,mode,source){ await api('/api/answer',{method:'POST',body:JSON.stringify({word_id:w.id,mode:mode,correct:ok,source:source||''})}); }
 async function checkA(){
   if(D.answered)return; const i=$('qin'),u=i.value.trim(); if(!u)return i.focus();
   const w=D.queue[D.i],ok=isOk(u,w); D.answered=true; i.disabled=true; i.classList.add(ok?'ok':'no');
@@ -471,7 +515,7 @@ async function startCards(){
   if(CD.diff==='due'){ pool=await api('/api/srs/due'); if(!pool.length) return toast('Нет сложных слов для повторения 🎉'); }
   else { pool=WORDS.filter(w=>CD.diff==='all'||w.difficulty==CD.diff); }
   if(!pool.length) return toast('Нет слов');
-  CD.queue=shuffle(pool); CD.i=0; CD.session=0; CD.known=0; CD.infinite=$('infiniteChk').checked;
+  CD.queue=shuffle(pool); CD.i=0; CD.session=0; CD.known=0; CD.unknown=0; CD.infinite=$('infiniteChk').checked;
   $('cardSetup').style.display='none'; $('cardPlay').style.display=''; showCard();
 }
 function showCard(){
@@ -492,14 +536,22 @@ function flipCard(){
 }
 async function cardRate(ok){
   const w=CD.queue[CD.i];
-  await answer(ok,w,'cards');
+  await answer(ok,w,'cards','card');
   CD.session++; if(ok)CD.known++;
+  if(!ok){ CD.unknown=(CD.unknown||0)+1; updateHwBadge(); }
   CD.i++;
   if(CD.i>=CD.queue.length){
     if(CD.infinite){ CD.queue=shuffle(CD.queue); CD.i=0; toast('∞ Новый круг!'); }
     else { stopCards(); return toast(`Готово! Знал ${CD.known} из ${CD.session}`); }
   }
   showCard();
+}
+async function updateHwBadge(){
+  try{
+    const r=await api('/api/homework/count');
+    const badge=$('hwBadge');
+    if(badge){ badge.textContent=r.open||''; badge.style.display=r.open?'inline-flex':'none'; }
+  }catch(e){}
 }
 function stopCards(){ $('cardPlay').style.display='none'; $('cardSetup').style.display=''; loadDueCount(); }
 
@@ -525,6 +577,20 @@ async function loadStats(){
   const max=Math.max(1,...s.chart.map(x=>x.p));
   $('chart').innerHTML=s.chart.map(x=>{const wd=new Date(x.d).toLocaleDateString('ru',{weekday:'short'});
     return `<div class="cbw"><div class="cbv">${x.p||''}</div><div class="cb" style="height:${Math.max(4,x.p/max*110)}px"></div><div class="cbl">${wd}</div></div>`}).join('');
+  // Карточки
+  if(s.cards){
+    $('cKnown').textContent=s.cards.totalKnown||0;
+    $('cUnknown').textContent=s.cards.totalUnknown||0;
+    $('stubborn').innerHTML=s.cards.stubborn&&s.cards.stubborn.length
+      ? s.cards.stubborn.map((w,i)=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--b100)"><span><b>${esc(w.en)}</b> — ${esc(w.ru)}</span><span style="color:var(--err);font-weight:600">✗ ${w.unknown_count}</span></div>`).join('')
+      : '<div style="color:var(--mut)">Нет данных</div>';
+  }
+  // Домашка
+  if(s.homework){
+    $('hwTotal').textContent=s.homework.total||0;
+    $('hwDone').textContent=s.homework.done||0;
+    $('hwOpen').textContent=s.homework.open||0;
+  }
 }
 async function loadChangelog(){
   const c=await fetch('/api/changelog').then(r=>r.json());
@@ -534,6 +600,80 @@ async function broadcast(){
   const m=$('bcMsg').value.trim(); if(!m)return;
   const r=await api('/api/broadcast',{method:'POST',body:JSON.stringify({message:m})});
   toast(r.ok?'Отправлено ✓':(r.error||'Ошибка'));
+}
+
+/* ── homework ── */
+let HW=[];
+async function loadHomework(){
+  try{
+    HW=await api('/api/homework');
+    renderHomework();
+    const badge=$('hwBadge');
+    if(badge){ badge.textContent=HW.length||''; badge.style.display=HW.length?'inline-flex':'none'; }
+  }catch(e){}
+}
+function renderHomework(){
+  const list=$('hwList'), empty=$('hwEmpty');
+  if(!HW.length){ list.innerHTML=''; empty.style.display=''; return; }
+  empty.style.display='none';
+  list.innerHTML=HW.map(h=>{
+    const due=new Date(h.due_at).toLocaleString('ru',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+    const overdue=new Date(h.due_at)<new Date();
+    return `<div class="hw-card hw-stage${h.stage}" id="hw-${h.word_id}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:8px">
+        <div>
+          <div style="font-family:'Manrope';font-size:20px;font-weight:700;color:var(--p700)">${esc(h.en)}</div>
+          <div style="font-size:14px;color:var(--sec);margin-top:2px">${esc(h.ru)}</div>
+          ${h.synonyms?`<div style="font-size:12px;color:var(--mut);font-style:italic">≈ ${esc(h.synonyms)}</div>`:''}
+        </div>
+        <span style="white-space:nowrap;font-size:11px;font-weight:600;padding:4px 10px;border-radius:10px;background:${h.stage===0?'var(--warnbg)':'var(--p50)'};color:${h.stage===0?'var(--warn)':'var(--p700)'}">
+          ${h.stage===0?'📖 Учи':'✏️ Тест'}
+        </span>
+      </div>
+      ${h.note?`<div class="wn" style="margin-bottom:10px">${esc(h.note)}</div>`:''}
+      <div style="font-size:11px;margin-bottom:12px;color:${overdue?'var(--err)':'var(--mut)'}">
+        ${overdue?'⚠️ Просрочено':'⏰ До'}: ${due}
+      </div>
+      <div id="hw-test-${h.word_id}" style="display:none;margin-bottom:12px">
+        <input class="qi" id="hw-inp-${h.word_id}" placeholder="Введите перевод на русский..."
+          onkeydown="if(event.key==='Enter')checkHW(${h.word_id})">
+        <div class="fb" id="hw-fb-${h.word_id}"></div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        ${h.stage===0
+          ?`<button class="btn bp" style="flex:1;justify-content:center" onclick="hwStudy(${h.word_id})">📖 Открыть в справочнике</button>`
+          :`<button class="btn bp" style="flex:1;justify-content:center" onclick="hwStartTest(${h.word_id})">✏️ Пройти тест</button>`
+        }
+        <button class="btn bs" style="font-size:13px" onclick="hwPostpone(${h.word_id})">Отложить</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+async function hwStudy(wordId){
+  await api('/api/homework/'+wordId+'/viewed',{method:'POST'});
+  const hw=HW.find(h=>h.word_id===wordId);
+  if(hw){ switchView('dictionary'); $('search').value=hw.en; renderWords(); }
+  setTimeout(loadHomework,600);
+}
+function hwStartTest(wordId){
+  const t=$('hw-test-'+wordId); if(!t)return; t.style.display='';
+  const inp=$('hw-inp-'+wordId); inp.value=''; inp.className='qi'; inp.disabled=false;
+  $('hw-fb-'+wordId).className='fb'; inp.focus();
+}
+async function checkHW(wordId){
+  const hw=HW.find(h=>h.word_id===wordId); if(!hw)return;
+  const inp=$('hw-inp-'+wordId); const u=inp.value.trim(); if(!u)return inp.focus();
+  const ok=isOk(u,hw); inp.disabled=true; inp.classList.add(ok?'ok':'no');
+  await api('/api/answer',{method:'POST',body:JSON.stringify({word_id:wordId,mode:'en-ru',correct:ok,source:'card'})});
+  const fb=$('hw-fb-'+wordId); fb.className='fb '+(ok?'ok':'no');
+  if(ok){ fb.innerHTML='✓ Верно! Домашка закрыта 🎉 +10 очков'; setTimeout(loadHomework,1200); }
+  else fb.innerHTML=`✗ Неверно — правильный ответ: <span class="fba">${esc(hw.ru)}</span>`;
+}
+async function hwPostpone(wordId){
+  const r=await api('/api/homework/'+wordId+'/postpone',{method:'POST'});
+  if(r.error)return toast('⚠️ '+r.error);
+  toast('Отложено ✓ Осталось откладываний: '+r.postponesLeft);
+  await loadHomework();
 }
 </script>
 </body>
