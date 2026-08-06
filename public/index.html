@@ -240,10 +240,38 @@ async function init(){
 }
 
 async function boot(){
-  cfg=await fetch('/api/config').then(r=>r.json());
-  $('ver').textContent='v'+cfg.version;
+  cfg = await fetch('/api/config').then(r => r.json());
+  $('ver').textContent = 'v' + cfg.version;
 
-  // Редирект-кнопка вместо попапа (работает во всех браузерах)
+  // === Обработка возврата от Telegram (данные в URL hash) ===
+  if (location.hash.startsWith('#tgAuthResult=')) {
+    try {
+      const b64 = location.hash.slice('#tgAuthResult='.length);
+      const json = atob(b64);
+      const authData = JSON.parse(json);
+      // Чистим URL
+      history.replaceState(null, '', location.pathname);
+      // Отправляем на сервер
+      const r = await fetch('/auth/telegram', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        credentials: 'include',
+        body: JSON.stringify(authData)
+      });
+      if (r.ok) {
+        location.reload();
+        return;
+      } else {
+        const err = await r.json().catch(() => ({}));
+        toast('Ошибка входа: ' + (err.error || 'unknown'));
+      }
+    } catch(e) {
+      console.error('auth parse error', e);
+      toast('Ошибка разбора данных Telegram');
+    }
+  }
+
+  // === Редирект-кнопка входа ===
   const returnTo = location.origin + '/auth/telegram';
   const loginUrl = 'https://oauth.telegram.org/auth?bot_id=' + encodeURIComponent(cfg.botId)
     + '&origin=' + encodeURIComponent(location.origin)
@@ -251,11 +279,11 @@ async function boot(){
     + '&request_access=write&embed=0';
   $('tgLogin').innerHTML = '<a href="'+loginUrl+'" class="btn bp" style="font-size:16px;padding:16px 32px;display:inline-flex;align-items:center;gap:12px"><svg class="tg-icon" viewBox="0 0 24 24" fill="white"><path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/></svg> Войти через Telegram</a>';
 
-  try{
-    const me=await fetch('/api/me',{credentials:'include'});
-    if(me.ok){ ME=(await me.json()).user; init(); }
+  try {
+    const me = await fetch('/api/me', { credentials:'include' });
+    if (me.ok) { ME = (await me.json()).user; init(); }
     else showLogin();
-  }catch(e){ showLogin(); }
+  } catch(e) { showLogin(); }
 }
 boot();
 
