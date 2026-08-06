@@ -15,7 +15,7 @@ const VERSION = '0.2.0';
 const CHANGELOG = [
  { v:'0.2.0', date:'сегодня', notes:[
    'Полноценный деплой на Railway + PostgreSQL',
-   'Вход через Telegram, сессии, админка',
+   'Вход через редирект (без попапов)',
    'Турнир, статистика, стрик и штрафы' ]},
  { v:'0.1.0', date:'ранее', notes:['Первый релиз'] }
 ];
@@ -103,7 +103,7 @@ app.post('/auth/telegram', async (req,res)=>{
     const token = await createSession(u.id);
     res.cookie('sid',token,{ httpOnly:true, sameSite:'lax', maxAge:30*864e5, secure:process.env.NODE_ENV==='production' });
     res.json({ user:{ id:u.id, name:(u.first_name||u.username||'User'), username:u.username, isAdmin:u.is_admin } });
-  }catch(e){ console.error('auth error',e); res.status(500).json({error:'server error: '+e.message}); }
+  }catch(e){ console.error('auth error',e); res.status(500).json({error:'server error'}); }
 });
 
 app.post('/auth/logout',(req,res)=>{ res.clearCookie('sid'); res.json({ok:true}); });
@@ -114,7 +114,6 @@ app.get('/api/me', auth, async (req,res)=>{
   res.json({ user:{ id:u.id, name:(u.first_name||u.username||'User'), username:u.username, isAdmin:u.is_admin, rating:u.rating, streak:u.streak } });
 });
 
-/* ─── words ─── */
 app.get('/api/words', auth, async (req,res)=>{
   const { rows } = await db.q('SELECT * FROM words ORDER BY id DESC');
   res.json(rows);
@@ -129,7 +128,6 @@ app.delete('/api/words/:id', auth, adminOnly, async (req,res)=>{
   await db.q('DELETE FROM words WHERE id=$1',[req.params.id]); res.json({ok:true});
 });
 
-/* ─── answers & dictation ─── */
 app.post('/api/answer', auth, async (req,res)=>{
   const { word_id, mode, correct } = req.body;
   await db.q('INSERT INTO answers(user_id,word_id,mode,correct) VALUES($1,$2,$3,$4)',[req.user.id,word_id,mode,correct]);
@@ -154,7 +152,6 @@ app.post('/api/dictation', auth, async (req,res)=>{
   res.json({ bonus });
 });
 
-/* ─── stats & tournament ─── */
 app.get('/api/stats', auth, async (req,res)=>{
   await applyPenalties(req.user.id);
   const uid = req.user.id;
@@ -183,7 +180,6 @@ app.get('/api/tournament', auth, async (req,res)=>{
   res.json(rows.map(r=>({ id:r.id, name:(r.first_name||r.username||'User'), streak:r.streak, pts:r.pts, me:r.id===req.user.id })));
 });
 
-/* ─── broadcast & changelog ─── */
 app.get('/api/changelog',(req,res)=>res.json(CHANGELOG));
 app.post('/api/broadcast', auth, adminOnly, async (req,res)=>{
   const chatId = await getBroadcastChat();
@@ -197,7 +193,6 @@ async function getBroadcastChat(){
   return r?r.value:null;
 }
 
-/* ─── Telegram webhook ─── */
 app.post('/telegram/webhook', async (req,res)=>{
   res.sendStatus(200);
   const msg = req.body?.message; if(!msg) return;
@@ -217,21 +212,18 @@ app.post('/telegram/webhook', async (req,res)=>{
   if(text.startsWith('/start')) return tg.sendMessage(chatId,`Привет, ${from.first_name}!`);
 });
 
-/* ─── reminders ─── */
 let lastRemind=''; let lastMaint='';
 setInterval(async ()=>{
   try{
     const now=new Date(); const t=today();
     if(lastMaint!==t){ lastMaint=t; const us=(await db.q('SELECT id FROM users')).rows; for(const u of us) await applyPenalties(u.id); }
-    const remindHour = 19;
-    if(now.getHours()>=remindHour && lastRemind!==t){
+    if(now.getHours()>=19 && lastRemind!==t){
       const chat=await getBroadcastChat();
       if(chat){ await tg.sendMessage(chat,'📚 StudyСПб: не забудьте диктант сегодня!'); lastRemind=t; }
     }
   }catch(e){ console.error('loop',e.message); }
 },60000);
 
-/* ─── start ── */
 (async ()=>{
   await db.init();
   if(process.env.PUBLIC_URL) await tg.setWebhook(process.env.PUBLIC_URL+'/telegram/webhook').catch(()=>{});
