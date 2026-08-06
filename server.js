@@ -1,8 +1,4 @@
-app.get('/api/config',(req,res)=>{
-  const tokenParts = (process.env.BOT_TOKEN||'').split(':');
-  const botId = tokenParts[0] || '';
-  res.json({ botUsername:process.env.BOT_USERNAME, botId, version:VERSION });
-});
+const express = require('express');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
 const path = require('path');
@@ -66,7 +62,12 @@ async function auth(req,res,next){
 function adminOnly(req,res,next){ if(!req.user.is_admin) return res.status(403).json({error:'admin only'}); next(); }
 
 /* ─── auth routes ─── */
-app.get('/api/config',(req,res)=>res.json({ botUsername:process.env.BOT_USERNAME, version:VERSION }));
+app.get('/api/config',(req,res)=>{
+  const tokenParts = (process.env.BOT_TOKEN||'').split(':');
+  const botId = tokenParts[0] || '';
+  res.json({ botUsername:process.env.BOT_USERNAME, botId, version:VERSION });
+});
+
 app.get('/auth/telegram', async (req,res)=>{
   try{
     const data = req.query;
@@ -230,7 +231,7 @@ setInterval(async ()=>{
   }catch(e){ console.error('loop',e.message); }
 },60000);
 
-/* ─── start ─── */
+/* ─── start ── */
 (async ()=>{
   await db.init();
   if(process.env.PUBLIC_URL) await tg.setWebhook(process.env.PUBLIC_URL+'/telegram/webhook').catch(()=>{});
