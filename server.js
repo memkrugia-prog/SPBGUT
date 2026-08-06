@@ -280,5 +280,22 @@ setInterval(async ()=>{
 (async ()=>{
   await db.init();
   if(process.env.PUBLIC_URL) await tg.setWebhook(process.env.PUBLIC_URL+'/telegram/webhook').catch(()=>{});
+
+  // === Авто-рассылка changelog при старте новой версии ===
+  try{
+    const last = (await db.q("SELECT value FROM settings WHERE key='last_broadcast_version'")).rows[0];
+    const lastVersion = last ? last.value : '';
+    if(lastVersion !== VERSION){
+      const chat = await getBroadcastChat();
+      if(chat){
+        const latest = CHANGELOG[0];
+        const msg = `🚀 <b>StudyСПб обновился до v${latest.v}</b>\n\n${latest.notes.map(n=>'• '+n).join('\n')}\n\nОткрой сайт и попробуй новые функции!`;
+        await tg.sendMessage(chat, msg);
+        console.log('Broadcast changelog for v'+VERSION);
+      }
+      await db.q("INSERT INTO settings(key,value) VALUES('last_broadcast_version',$1) ON CONFLICT(key) DO UPDATE SET value=$1",[VERSION]);
+    }
+  }catch(e){ console.error('changelog broadcast error',e.message); }
+
   app.listen(PORT,()=>console.log('StudyСПб v'+VERSION+' запущен на',PORT,'| напоминание в',REMIND_HOUR_MOSCOW,':00 МСК'));
 })();
