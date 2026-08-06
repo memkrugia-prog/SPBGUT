@@ -162,7 +162,19 @@ app.post('/api/answer', auth, async (req,res)=>{
   await db.q('INSERT INTO answers(user_id,word_id,mode,correct) VALUES($1,$2,$3,$4)',[req.user.id,word_id,mode,correct]);
   const pts = correct?10:0;
   if(pts) await addRating(req.user.id,pts);
-  await addActivity(req.user.id,{points:pts,answered:1,correct:correct?1:0});
+    await addActivity(req.user.id,{points:pts,answered:1,correct:correct?1:0});
+  // SRS: ошибка → слово попадает в повторение, верно → выходит из очереди
+  if(!correct){
+    const cur = (await db.q('SELECT errors FROM srs WHERE user_id=$1 AND word_id=$2',[req.user.id,word_id])).rows[0];
+    const e = (cur?cur.errors:0)+1;
+    const mins = [10,60,360,1440,4320,10080][Math.min(e,6)-1] || 10080;
+    await db.q(`INSERT INTO srs(user_id,word_id,errors,next_review) VALUES($1,$2,$3,NOW()+($4||' minutes')::interval)
+      ON CONFLICT(user_id,word_id) DO UPDATE SET errors=$3, next_review=NOW()+($4||' minutes')::interval`,
+      [req.user.id,word_id,e,mins]);
+  } else {
+    await db.q(`UPDATE srs SET errors=GREATEST(0,errors-1) WHERE user_id=$1 AND word_id=$2`,[req.user.id,word_id]);
+    await db.q(`DELETE FROM srs WHERE user_id=$1 AND word_id=$2 AND errors=0`,[req.user.id,word_id]);
+  }
   res.json({ ok:true });
 });
 
@@ -216,7 +228,14 @@ app.get('/api/tournament', auth, async (req,res)=>{
     GROUP BY u.id ORDER BY pts DESC`,[start,end]);
   res.json(rows.map(r=>({ id:r.id, name:(r.first_name||r.username||'User'), streak:r.streak, pts:r.pts, me:r.id===req.user.id })));
 });
-
+app.get('/api/srs/due', auth, async (req,res)=>{
+  const { rows } = await db.q(`SELECT w.* FROM srs s JOIN words w ON w.id=s.word_id WHERE s.user_id=$1 AND s.next_review<=NOW() ORDER BY s.errors DESC LIMIT 20`,[req.user.id]);
+  res.json(rows);
+});
+app.get('/api/srs/count', auth, async (req,res)=>{
+  const { rows } = await db.q(`SELECT COUNT(*)::int n FROM srs WHERE user_id=$1 AND next_review<=NOW()`,[req.user.id]);
+  res.json({ due: rows[0].n });
+});
 app.get('/api/changelog',(req,res)=>res.json(CHANGELOG));
 app.post('/api/broadcast', auth, adminOnly, async (req,res)=>{
   const chatId = await getBroadcastChat();
