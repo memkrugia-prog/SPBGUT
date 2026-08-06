@@ -11,31 +11,32 @@ app.use(cookieParser());
 app.use(express.static(path.join(__dirname,'public')));
 const PORT = process.env.PORT || 3000;
 const ADMIN_IDS = (process.env.ADMIN_TG_IDS||'').split(',').map(s=>s.trim()).filter(Boolean).map(Number);
-const VERSION = '0.3.0';
-const REMIND_HOUR_MOSCOW = parseInt(process.env.REMIND_HOUR || '19'); // 19:00 МСК по умолчанию
-const MOSCOW_OFFSET = 3; // МСК = UTC+3
-const REMIND_HOUR_UTC = (REMIND_HOUR_MOSCOW - MOSCOW_OFFSET + 24) % 24; // 16:00 UTC
+const VERSION = '0.3.1';
+const REMIND_HOUR_MOSCOW = parseInt(process.env.REMIND_HOUR || '19');
+const MOSCOW_OFFSET = 3;
 
 const CHANGELOG = [
- { v:'0.3.0', date:'сегодня', notes:[
-   'Автоматическая рассылка в заданное время (19:00 МСК)',
-   'Обратный отсчёт 24 часа до штрафа в реальном времени',
-   'Категории сложности: лёгкие / средние / сложные',
-   'Множественные переводы и синонимы для каждого слова',
-   'Штраф −50 очков за 24 часа без диктанта (считается по часам)' ]},
- { v:'0.2.0', date:'ранее', notes:['Railway + PostgreSQL, Telegram OAuth, турнир'] },
+ { v:'0.3.1', date:'сегодня', notes:[
+   'Авто-рассылка changelog при каждом деплое',
+   'Команда /version в боте',
+   'Расширенные нюансы для всех слов' ]},
+ { v:'0.3.0', date:'ранее', notes:[
+   'Автоматическая рассылка в 19:00 МСК',
+   'Обратный отсчёт 24 часа до штрафа',
+   'Категории сложности',
+   'Множественные переводы и синонимы' ]},
+ { v:'0.2.0', date:'ранее', notes:['Railway + PostgreSQL, Telegram OAuth'] },
  { v:'0.1.0', date:'ранее', notes:['Первый релиз'] }
 ];
 
-const nowUTC = () => new Date();
 const today = () => new Date().toISOString().slice(0,10);
 
 async function applyPenaltiesFor(userId){
   const u = (await db.q('SELECT * FROM users WHERE id=$1',[userId])).rows[0];
   if(!u || !u.last_dict_at) return;
-  const diff = (Date.now() - new Date(u.last_dict_at).getTime()) / 36e5; // часов
+  const diff = (Date.now() - new Date(u.last_dict_at).getTime()) / 36e5;
   if(diff > 24){
-    const missCount = Math.floor(diff / 24) - 1; // количество пропущенных 24ч
+    const missCount = Math.floor(diff / 24) - 1;
     if(missCount > 0){
       await db.q('UPDATE users SET rating=GREATEST(0,rating-$1) WHERE id=$2',[missCount*50,userId]);
     }
@@ -121,7 +122,6 @@ app.post('/auth/logout',(req,res)=>{ res.clearCookie('sid'); res.json({ok:true})
 app.get('/api/me', auth, async (req,res)=>{
   await applyPenaltiesFor(req.user.id);
   const u = (await db.q('SELECT * FROM users WHERE id=$1',[req.user.id])).rows[0];
-  // считаем время до следующего обязательного диктанта (24ч от последнего)
   let nextDeadline = null;
   if(u.last_dict_at){
     nextDeadline = new Date(u.last_dict_at).getTime() + 24*36e5;
@@ -169,15 +169,12 @@ app.post('/api/answer', auth, async (req,res)=>{
 app.post('/api/dictation', auth, async (req,res)=>{
   const { total, correct, difficulty } = req.body;
   let bonus = 20; if(correct===total) bonus+=30;
-  // бонус за сложность
   if(difficulty==3) bonus += 15;
   else if(difficulty==2) bonus += 5;
   await addRating(req.user.id,bonus);
   await addActivity(req.user.id,{points:bonus,dictations:1});
   await db.q('INSERT INTO dictations(user_id,total,correct,points,difficulty) VALUES($1,$2,$3,$4,$5)',[req.user.id,total,correct,bonus,difficulty||2]);
-  // обновляем время последнего диктанта — обнуляем таймер штрафа
   await db.q('UPDATE users SET last_dict_at=NOW() WHERE id=$1',[req.user.id]);
-  // стрик
   const u = (await db.q('SELECT * FROM users WHERE id=$1',[req.user.id])).rows[0];
   const t = today();
   const lastDay = u.last_dict_at ? u.last_dict_at.toISOString().slice(0,10) : null;
@@ -199,7 +196,6 @@ app.get('/api/stats', auth, async (req,res)=>{
   const days=[...Array(7)].map((_,i)=>new Date(Date.now()-((6-i)*864e5)).toISOString().slice(0,10));
   const chart=[];
   for(const d of days){ const a=(await db.q('SELECT COALESCE(points,0) p FROM activity WHERE user_id=$1 AND day=$2',[uid,d])).rows[0]; chart.push({d,p:a?a.p:0}); }
-  // статистика по сложностям
   const diffs = (await db.q(`SELECT d.difficulty, COUNT(*)::int cnt, SUM(d.correct)::int corr FROM dictations d WHERE d.user_id=$1 GROUP BY d.difficulty`,[uid])).rows;
   const byDiff = {1:{n:0,c:0},2:{n:0,c:0},3:{n:0,c:0}};
   diffs.forEach(r=>{ if(r.difficulty) byDiff[r.difficulty]={n:r.cnt,c:r.corr}; });
@@ -250,12 +246,11 @@ app.post('/telegram/webhook', async (req,res)=>{
     const m=text.replace('/broadcast','').trim(); const target=await getBroadcastChat();
     if(target&&m) return tg.sendMessage(target,m);
   }
-    if(text.startsWith('/start')) return tg.sendMessage(chatId,`Привет, ${from.first_name}!`);
-    if(text.startsWith('/version')) return tg.sendMessage(chatId,`📦 StudyСПб v${VERSION}`);
-    if(text.startsWith('/help')) ...
+  if(text.startsWith('/start')) return tg.sendMessage(chatId,`Привет, ${from.first_name}! Это бот StudyСПб 📚`);
+  if(text.startsWith('/version')) return tg.sendMessage(chatId,`📦 StudyСПб v${VERSION}`);
+  if(text.startsWith('/help')) return tg.sendMessage(chatId,'Команды:\n/start — приветствие\n/version — текущая версия\n/setbroadcast — (админ) привязать группу\n/broadcast <текст> — (админ) рассылка');
 });
 
-// Планировщик: рассылка + штрафы
 let lastBroadcast='';
 setInterval(async ()=>{
   try{
@@ -263,11 +258,7 @@ setInterval(async ()=>{
     const mskHour = (now.getUTCHours() + MOSCOW_OFFSET) % 24;
     const mskMin = now.getUTCMinutes();
     const dayKey = now.toISOString().slice(0,10);
-
-    // Штрафы — каждые 10 минут
     await applyAllPenalties();
-
-    // Рассылка в заданное время (минута 0-1)
     if(mskHour === REMIND_HOUR_MOSCOW && mskMin < 2 && lastBroadcast !== dayKey){
       const chat = await getBroadcastChat();
       if(chat){
@@ -281,8 +272,6 @@ setInterval(async ()=>{
 (async ()=>{
   await db.init();
   if(process.env.PUBLIC_URL) await tg.setWebhook(process.env.PUBLIC_URL+'/telegram/webhook').catch(()=>{});
-
-  // === Авто-рассылка changelog при старте новой версии ===
   try{
     const last = (await db.q("SELECT value FROM settings WHERE key='last_broadcast_version'")).rows[0];
     const lastVersion = last ? last.value : '';
@@ -297,6 +286,5 @@ setInterval(async ()=>{
       await db.q("INSERT INTO settings(key,value) VALUES('last_broadcast_version',$1) ON CONFLICT(key) DO UPDATE SET value=$1",[VERSION]);
     }
   }catch(e){ console.error('changelog broadcast error',e.message); }
-
   app.listen(PORT,()=>console.log('StudyСПб v'+VERSION+' запущен на',PORT,'| напоминание в',REMIND_HOUR_MOSCOW,':00 МСК'));
 })();
