@@ -250,8 +250,9 @@ app.post('/telegram/webhook', async (req,res)=>{
     const m=text.replace('/broadcast','').trim(); const target=await getBroadcastChat();
     if(target&&m) return tg.sendMessage(target,m);
   }
-  if(text.startsWith('/start')) return tg.sendMessage(chatId,`Привет, ${from.first_name}! Это бот StudyСПб 📚\n\nКоманды:\n/start — приветствие\n/help — список команд`);
-  if(text.startsWith('/help')) return tg.sendMessage(chatId,'Команды:\n/start — приветствие\n/setbroadcast — (админ) привязать группу\n/broadcast <текст> — (админ) рассылка');
+    if(text.startsWith('/start')) return tg.sendMessage(chatId,`Привет, ${from.first_name}!`);
+    if(text.startsWith('/version')) return tg.sendMessage(chatId,`📦 StudyСПб v${VERSION}`);
+    if(text.startsWith('/help')) ...
 });
 
 // Планировщик: рассылка + штрафы
