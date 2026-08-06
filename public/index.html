@@ -25,7 +25,7 @@ main{max-width:1100px;margin:0 auto;padding:34px 20px 90px}
 @keyframes fi{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
 .card{background:var(--white);border-radius:var(--radius);padding:24px;border:1px solid rgba(124,58,237,.07);box-shadow:var(--shadow)}
 .btn{display:inline-flex;align-items:center;gap:8px;padding:12px 22px;border:none;border-radius:14px;font-family:'Inter';font-size:14px;font-weight:600;cursor:pointer;transition:.25s}
-.bp{background:linear-gradient(135deg,var(--p600),var(--p500));color:#fff;box-shadow:0 4px 14px rgba(124,58,237,.25)}
+.bp{background:linear-gradient(135deg,var(--p600),var(--p500));color:#fff;box-shadow:0 4px 14px rgba(124,58,237,.25);text-decoration:none}
 .bp:hover{transform:translateY(-2px)}
 .bs{background:var(--white);color:var(--p700);border:1.5px solid var(--p100)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
@@ -71,6 +71,7 @@ th{font-size:12px;color:var(--mut);text-transform:uppercase}
 .toast.show{transform:translateX(-50%) translateY(0)}
 #login{min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:22px;padding:20px;text-align:center}
 .tgbtn{min-height:50px}
+.tg-icon{width:24px;height:24px;display:inline-block;vertical-align:middle}
 @media(max-width:640px){.hin{flex-wrap:wrap;height:auto;padding:10px 14px}main{padding:22px 14px}}
 </style>
 </head>
@@ -228,12 +229,7 @@ const shuffle=a=>{a=[...a];for(let i=a.length-1;i>0;i--){const j=Math.floor(Math
 /* ── login ── */
 function showLogin(){ $('login').style.display='flex'; $('app').style.display='none'; }
 function showApp(){ $('login').style.display='none'; $('app').style.display='block'; }
-window.onTelegramAuth = async (u)=>{
-  try{ const r=await fetch('/auth/telegram',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(u)});
-    const j=await r.json(); if(!r.ok) return toast('Ошибка входа');
-    ME=j.user; init(); }catch(e){ toast('Ошибка входа'); }
-};
-async function logout(){ await fetch('/auth/logout',{method:'POST'}); location.reload(); }
+async function logout(){ await fetch('/auth/logout',{method:'POST'}); location.href='/'; }
 
 /* ── init ── */
 async function init(){
@@ -242,16 +238,24 @@ async function init(){
   WORDS=await api('/api/words'); renderWords(); loadChangelog();
   switchView('dictionary');
 }
+
 async function boot(){
   cfg=await fetch('/api/config').then(r=>r.json());
   $('ver').textContent='v'+cfg.version;
-  // рендерим Telegram Login Widget
-  const s=document.createElement('script'); s.src='https://telegram.org/js/telegram-widget.js?22';
-  s.setAttribute('data-telegram-login',cfg.botUsername); s.setAttribute('data-size','large');
-  s.setAttribute('data-onauth','onTelegramAuth'); s.setAttribute('data-request-access','write');
-  $('tgLogin').innerHTML=''; $('tgLogin').appendChild(s);
-  try{ const me=await fetch('/api/me',{credentials:'include'}); if(me.ok){ ME=(await me.json()).user; init(); } else showLogin(); }
-  catch(e){ showLogin(); }
+
+  // Редирект-кнопка вместо попапа (работает во всех браузерах)
+  const returnTo = location.origin + '/auth/telegram';
+  const loginUrl = 'https://oauth.telegram.org/auth?bot_id=' + encodeURIComponent(cfg.botUsername)
+    + '&origin=' + encodeURIComponent(location.origin)
+    + '&return_to=' + encodeURIComponent(returnTo)
+    + '&request_access=write&embed=0';
+  $('tgLogin').innerHTML = '<a href="'+loginUrl+'" class="btn bp" style="font-size:16px;padding:16px 32px;display:inline-flex;align-items:center;gap:12px"><svg class="tg-icon" viewBox="0 0 24 24" fill="white"><path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/></svg> Войти через Telegram</a>';
+
+  try{
+    const me=await fetch('/api/me',{credentials:'include'});
+    if(me.ok){ ME=(await me.json()).user; init(); }
+    else showLogin();
+  }catch(e){ showLogin(); }
 }
 boot();
 
