@@ -1,4 +1,8 @@
-const express = require('express');
+app.get('/api/config',(req,res)=>{
+  const tokenParts = (process.env.BOT_TOKEN||'').split(':');
+  const botId = tokenParts[0] || '';
+  res.json({ botUsername:process.env.BOT_USERNAME, botId, version:VERSION });
+});
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
 const path = require('path');
