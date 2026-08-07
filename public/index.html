@@ -520,7 +520,9 @@ async function startCards(){
 }
 function showCard(){
   const w=CD.queue[CD.i]; CD.flipped=false;
-  $('fcInner').style.transform='rotateY(0deg)';
+  const inner=$('fcInner');
+  inner.style.transition='none';
+  inner.style.transform='rotateY(0deg)';
   $('cardBtns').style.display='none';
   $('fcFront').innerHTML=esc(w.en)+' '+diffBadge(w.difficulty||2);
   $('fcBack').textContent=w.ru;
@@ -528,6 +530,8 @@ function showCard(){
   $('fcNote').textContent=w.note||'';
   $('cardCount').textContent=`Карта ${CD.i+1} / ${CD.queue.length}`;
   $('cardSession').textContent=`Изучено: ${CD.session} · Знал: ${CD.known}`;
+  void inner.offsetWidth;
+  inner.style.transition='transform .6s';
 }
 function flipCard(){
   if(CD.flipped) return; CD.flipped=true;
