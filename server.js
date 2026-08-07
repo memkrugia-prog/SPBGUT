@@ -327,7 +327,30 @@ app.post('/api/homework/:wordId/postpone', auth, async (req,res)=>{
   );
   res.json({ ok:true, postponesLeft: 2 - postpones });
 });
-
+// ─── Тест домашки (без подсказок) ────────────────────────────────────────────
+const norm=s=>(s||'').toLowerCase().replace(/[.,!?;:()«»"'\/\-–—]/g,' ').replace(/\s+/g,' ').trim();
+function isOkAns(u,w){
+  const us=norm(u); const targets=[w.ru]; if(w.synonyms) targets.push(w.synonyms);
+  const all=targets.join(',').split(/[\/,]/).map(norm).filter(Boolean);
+  return all.some(v=>us===v||us.includes(v)||v.includes(us));
+}
+app.post('/api/homework/test', auth, async (req,res)=>{
+  const { word_id, answer } = req.body;
+  const w=(await db.q('SELECT * FROM words WHERE id=$1',[word_id])).rows[0];
+  if(!w) return res.status(404).json({error:'no word'});
+  const ok=isOkAns(answer,w);
+  if(ok){
+    await db.q(`UPDATE homework SET stage=2 WHERE user_id=$1 AND word_id=$2`,[req.user.id,word_id]);
+    const c=(await db.q('SELECT known_count FROM srs WHERE user_id=$1 AND word_id=$2',[req.user.id,word_id])).rows[0];
+    const kc=(c?c.known_count:0)+1;
+    await db.q(`INSERT INTO srs(user_id,word_id,known_count,unknown_count,errors,next_review) VALUES($1,$2,$3,0,0,NOW()+($4||' minutes')::interval) ON CONFLICT(user_id,word_id) DO UPDATE SET known_count=$3,unknown_count=0,errors=0,next_review=NOW()+($4||' minutes')::interval`,[req.user.id,word_id,kc,knownInterval(kc)]);
+  } else {
+    const c=(await db.q('SELECT unknown_count FROM srs WHERE user_id=$1 AND word_id=$2',[req.user.id,word_id])).rows[0];
+    const uc=(c?c.unknown_count:0)+1;
+    await db.q(`UPDATE srs SET unknown_count=$1,errors=$1,next_review=NOW()+($2||' minutes')::interval WHERE user_id=$3 AND word_id=$4`,[uc,unknownInterval(uc),req.user.id,word_id]);
+  }
+  res.json({ ok, correct: w.ru });
+});
 // ─── Статистика ───────────────────────────────────────────────────────────────
 app.get('/api/stats', auth, async (req,res)=>{
   await applyPenaltiesFor(req.user.id);
